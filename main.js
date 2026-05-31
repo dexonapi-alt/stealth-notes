@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog, shell, screen, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -42,6 +42,25 @@ function noteFile(id) {
 }
 
 let mainWindow = null;
+let tray = null;
+
+function createTray() {
+  try {
+    let img = nativeImage.createFromPath(path.join(__dirname, 'assets', 'logo.png'));
+    if (!img.isEmpty()) img = img.resize({ width: 16, height: 16 });
+    tray = new Tray(img);
+    tray.setToolTip('Stealth Notes');
+    const menu = Menu.buildFromTemplate([
+      { label: 'Show / Hide', click: () => { if (!mainWindow) return; mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show(); } },
+      { label: 'Compact pill', click: () => toggleCompact() },
+      { label: 'Toggle capture invisibility', click: () => toggleStealth() },
+      { type: 'separator' },
+      { label: 'Quit Stealth Notes', click: () => { app.quit(); } }
+    ]);
+    tray.setContextMenu(menu);
+    tray.on('click', () => { if (!mainWindow) return; if (mainWindow.isVisible()) mainWindow.focus(); else mainWindow.show(); });
+  } catch {}
+}
 // Hidden from capture by default. SN_NO_STEALTH=1 starts visible (used only for
 // local UI screenshots, since capture protection makes screenshots come out black).
 let stealthOn = process.env.SN_NO_STEALTH !== '1';
@@ -60,8 +79,12 @@ function createWindow() {
     height: 760,
     minWidth: 720,
     minHeight: 480,
-    backgroundColor: '#eef1fb',
+    backgroundColor: '#00000000', // transparent base; CSS paints the solid theme
+    transparent: true,            // enables the "invisible overlay" theme
+    skipTaskbar: true,            // run discreetly — no taskbar button (use tray/pill)
     title: 'Stealth Notes',
+    icon: path.join(__dirname, 'assets', 'logo.png'),
+    frame: false,           // Notion-style: no OS title bar, we draw our own header
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -77,7 +100,51 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.send('stealth:changed', stealthOn);
   });
+
+  mainWindow.on('maximize', () => mainWindow.webContents.send('win:state', true));
+  mainWindow.on('unmaximize', () => mainWindow.webContents.send('win:state', false));
 }
+
+// ---- IPC: custom window controls (frameless) ----
+ipcMain.handle('win:minimize', () => { if (mainWindow) mainWindow.minimize(); });
+ipcMain.handle('win:maximize', () => {
+  if (!mainWindow) return false;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
+  return mainWindow.isMaximized();
+});
+ipcMain.handle('win:close', () => { if (mainWindow) mainWindow.close(); });
+ipcMain.handle('win:isMaximized', () => !!(mainWindow && mainWindow.isMaximized()));
+
+// ---- Compact "floating pill" mode (discreet during calls) ----
+let savedState = null;
+let compact = false;
+function enterCompact() {
+  if (!mainWindow || compact) return;
+  savedState = { bounds: mainWindow.getBounds(), max: mainWindow.isMaximized() };
+  if (savedState.max) mainWindow.unmaximize();
+  const W = 176, H = 48;
+  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const area = disp.workArea;
+  mainWindow.setMinimumSize(W, H);
+  mainWindow.setResizable(false);
+  mainWindow.setBounds({ x: Math.round(area.x + (area.width - W) / 2), y: area.y + 8, width: W, height: H });
+  mainWindow.setAlwaysOnTop(true, 'screen-saver'); // float above call windows
+  compact = true;
+  mainWindow.webContents.send('compact:changed', true);
+}
+function exitCompact() {
+  if (!mainWindow || !compact) return;
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setMinimumSize(720, 480);
+  mainWindow.setResizable(true);
+  if (savedState) { if (savedState.max) mainWindow.maximize(); else mainWindow.setBounds(savedState.bounds); }
+  compact = false;
+  mainWindow.webContents.send('compact:changed', false);
+  mainWindow.focus();
+}
+function toggleCompact() { if (compact) exitCompact(); else enterCompact(); }
+ipcMain.handle('win:shrink', enterCompact);
+ipcMain.handle('win:expand', exitCompact);
 
 // ---- IPC: stealth toggle ----
 function toggleStealth() {
@@ -145,6 +212,115 @@ ipcMain.handle('export:save', async (_e, { defaultName, content, ext, filterName
   return res.filePath;
 });
 
+// ---- PDF import: extract text into a note (best-effort headings/paragraphs) ----
+async function parsePdfToDelta(buffer) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false, useSystemFonts: true }).promise;
+  const ops = [];
+  const pushLine = (text, type) => {
+    if (!text) return;
+    ops.push({ insert: text });
+    if (type === 'h1') ops.push({ insert: '\n', attributes: { header: 1 } });
+    else if (type === 'h2') ops.push({ insert: '\n', attributes: { header: 2 } });
+    else ops.push({ insert: '\n' });
+  };
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const tc = await page.getTextContent();
+    const rows = new Map(); // group text items into lines by y
+    for (const it of tc.items) {
+      if (typeof it.str !== 'string') continue;
+      const y = Math.round(it.transform[5]);
+      const size = Math.hypot(it.transform[2], it.transform[3]) || it.height || 10;
+      let r = rows.get(y);
+      if (!r) { r = { items: [], size: 0 }; rows.set(y, r); }
+      r.items.push(it);
+      if (size > r.size) r.size = size;
+    }
+    const ys = [...rows.keys()].sort((a, b) => b - a); // top -> bottom
+    const sizes = ys.map((y) => rows.get(y).size).sort((a, b) => a - b);
+    const median = sizes[Math.floor(sizes.length / 2)] || 10;
+    let prevY = null;
+    for (const y of ys) {
+      const r = rows.get(y);
+      const text = r.items.sort((a, b) => a.transform[4] - b.transform[4]).map((i) => i.str).join('').replace(/\s+/g, ' ').trim();
+      if (!text) { prevY = y; continue; }
+      if (prevY !== null && (prevY - y) > median * 1.9) ops.push({ insert: '\n' }); // paragraph gap
+      let type = 'p';
+      if (r.size > median * 1.55) type = 'h1';
+      else if (r.size > median * 1.22) type = 'h2';
+      pushLine(text, type);
+      prevY = y;
+    }
+    if (p < doc.numPages) ops.push({ insert: '\n' });
+  }
+  if (!ops.length) ops.push({ insert: '\n' });
+  return { ops };
+}
+
+// Best-effort: pull table cell background fills (w:shd w:fill) out of the docx
+// XML so imported tables keep their colors. Returns tables[t][row][col] = '#hex'|null.
+function extractTableFills(xml) {
+  const tables = [];
+  const tblRe = /<w:tbl[\s>][\s\S]*?<\/w:tbl>/g;
+  let mt;
+  while ((mt = tblRe.exec(xml))) {
+    const rows = [];
+    const trRe = /<w:tr[\s>][\s\S]*?<\/w:tr>/g;
+    let mr;
+    while ((mr = trRe.exec(mt[0]))) {
+      const cells = [];
+      const tcRe = /<w:tc[\s>][\s\S]*?<\/w:tc>/g;
+      let mc;
+      while ((mc = tcRe.exec(mr[0]))) {
+        const shd = /<w:shd[^>]*w:fill="([0-9A-Fa-f]{6})"/.exec(mc[0]);
+        let fill = shd ? shd[1] : null;
+        if (fill && /^[fF]{6}$/.test(fill)) fill = null; // white == no fill
+        cells.push(fill ? '#' + fill : null);
+      }
+      rows.push(cells);
+    }
+    tables.push(rows);
+  }
+  return tables;
+}
+
+// Convert a file at a path into note data (renderer builds the final note).
+async function importFromPath(p) {
+  const ext = path.extname(p).toLowerCase();
+  const name = path.basename(p).replace(/\.(pdf|docx)$/i, '') || 'Imported file';
+  if (ext === '.pdf') {
+    const delta = await parsePdfToDelta(fs.readFileSync(p));
+    return { kind: 'pdf', name, delta };
+  }
+  if (ext === '.docx') {
+    const mammoth = require('mammoth');
+    const result = await mammoth.convertToHtml({ path: p });
+    let tableFills = [];
+    try {
+      const JSZip = require('jszip');
+      const zip = await JSZip.loadAsync(fs.readFileSync(p));
+      const xmlFile = zip.file('word/document.xml');
+      if (xmlFile) tableFills = extractTableFills(await xmlFile.async('string'));
+    } catch {}
+    return { kind: 'docx', name, html: result.value || '', tableFills };
+  }
+  return { error: 'Unsupported file type — use PDF or .docx' };
+}
+ipcMain.handle('import:path', async (_e, p) => {
+  try { return await importFromPath(p); }
+  catch (e) { return { error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('import:browse', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import a file',
+    filters: [{ name: 'PDF or Word', extensions: ['pdf', 'docx'] }],
+    properties: ['openFile']
+  });
+  if (res.canceled || !res.filePaths[0]) return null;
+  return res.filePaths[0];
+});
+
 // ---- IPC: self-test (only meaningful when SN_SELFTEST=1) ----
 ipcMain.handle('selftest:enabled', () => process.env.SN_SELFTEST === '1');
 ipcMain.handle('selftest:report', (_e, msg) => {
@@ -157,9 +333,11 @@ app.whenReady().then(() => {
   ensureStorage();
   agent.init({ TREE_FILE, CONTENT_DIR, SETTINGS_FILE, MEMORY_FILE, getWin: () => mainWindow }, ipcMain);
   createWindow();
+  createTray();
 
   // Global hotkey to flip stealth even when the window isn't focused.
   globalShortcut.register('CommandOrControl+Shift+H', () => toggleStealth());
+  globalShortcut.register('CommandOrControl+Shift+M', () => toggleCompact());
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

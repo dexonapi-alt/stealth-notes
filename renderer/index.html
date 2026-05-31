@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:;" />
+  <title>Stealth Notes</title>
+  <link rel="stylesheet" href="../node_modules/quill/dist/quill.bubble.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="shell">
+    <!-- App header bar (VS Code / Notion style) -->
+    <header id="topbar">
+      <div class="tb-left">
+        <img id="appLogo" class="app-logo" src="../assets/logo.png" alt="Stealth Notes" />
+        <div class="menu-bar">
+          <button class="menu-btn" data-menu="file">File</button>
+          <button class="menu-btn" data-menu="edit">Edit</button>
+          <button class="menu-btn" data-menu="view">View</button>
+        </div>
+        <button id="sidebarToggle" class="icon-btn" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3" width="12" height="10" rx="2"/><line x1="6.2" y1="3" x2="6.2" y2="13"/></svg>
+        </button>
+      </div>
+      <div class="tb-center">
+        <span id="crumb" class="crumb">No note open</span>
+      </div>
+      <div class="tb-right">
+        <label class="ovl-ctl" title="Overlay opacity (how see-through)">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 000 11z" fill="currentColor" stroke="none"/></svg>
+          <input id="ovlOpacity" type="range" min="22" max="92" value="45" />
+        </label>
+        <button id="aiToggle" class="tb-action" title="Toggle assistant (Ctrl+/)">✦ Assistant</button>
+        <button id="exportBtn" class="tb-action" title="Export this note">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M8 2v8m0 0L5 7m3 3l3-3M3 12.5h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+          Export
+        </button>
+        <button id="stealthBtn" class="stealth-pill" title="Toggle screen-capture invisibility (Ctrl+Shift+H)">
+          <span class="dot"></span><span id="stealthLabel">Hidden</span>
+        </button>
+        <div class="win-controls">
+          <button id="winShrink" class="winbtn" title="Shrink to a floating pill (Ctrl+Shift+M)" aria-label="Compact">
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 2.5v3h-3M11.5 2.5v3h-3M5.5 11.5v-3h-3M11.5 11.5v-3h-3"/></svg>
+          </button>
+          <button id="winMin" class="winbtn" title="Minimize" aria-label="Minimize">
+            <svg viewBox="0 0 12 12" width="11" height="11"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2"/></svg>
+          </button>
+          <button id="winMax" class="winbtn" title="Maximize" aria-label="Maximize">
+            <svg viewBox="0 0 12 12" width="11" height="11"><rect x="2.5" y="2.5" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+          </button>
+          <button id="winClose" class="winbtn close" title="Close" aria-label="Close">
+            <svg viewBox="0 0 12 12" width="11" height="11"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div id="app">
+      <!-- Sidebar -->
+      <aside id="sidebar">
+        <div class="sidebar-head">
+          <div class="head-row">
+            <span class="brand">Notes</span>
+            <button id="newBtn" class="icon-btn" title="New (Ctrl+N)" aria-label="New">
+              <svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="tree" class="tree" tabindex="0"></div>
+        <div class="sidebar-foot">
+          <button id="profileBtn" class="profile" title="Profile">
+            <span class="avatar" id="avatar">·</span>
+            <span class="profile-meta">
+              <span class="profile-name" id="profileName">Local user</span>
+              <span class="profile-sub">Local profile</span>
+            </span>
+          </button>
+        </div>
+      </aside>
+
+      <div id="resizer"></div>
+
+      <!-- Main -->
+      <main id="main">
+        <div id="tabbar" class="tabbar empty"></div>
+        <div id="titlebar">
+          <input id="noteTitle" type="text" placeholder="Untitled" spellcheck="false" disabled />
+        </div>
+        <div id="editorHost">
+          <div id="editor"></div>
+          <div id="emptyState" class="empty-state">
+            <div class="empty-card">
+              <div class="empty-mark">✦</div>
+              <h2>Stealth Notes</h2>
+              <p>Pick a note on the left, or press <kbd>Ctrl</kbd>+<kbd>N</kbd> to start writing.</p>
+              <p class="muted">Select any text to bring up the formatting bar. This window stays hidden
+                from Zoom / Meet / OBS captures while the dot up top is green.</p>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- AI assistant panel -->
+      <aside id="aipanel">
+        <div class="ai-head">
+          <span class="ai-title">✦ Assistant<span class="ai-model" id="aiModel"></span></span>
+          <div class="ai-head-actions">
+            <button id="aiCloseBtn" class="icon-btn" title="Close panel (Ctrl+/)" aria-label="Close panel">
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
+            </button>
+            <button id="aiSettingsBtn" class="icon-btn" title="Settings" aria-label="Settings">
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                <line x1="2.5" y1="5" x2="13.5" y2="5"/><circle cx="5.5" cy="5" r="1.7" fill="var(--surface-soft)"/>
+                <line x1="2.5" y1="11" x2="13.5" y2="11"/><circle cx="10.5" cy="11" r="1.7" fill="var(--surface-soft)"/>
+              </svg>
+            </button>
+            <button id="aiClearBtn" class="icon-btn" title="Clear chat" aria-label="Clear">
+              <svg viewBox="0 0 16 16" width="15" height="15"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="aiSettings" class="ai-settings hidden">
+          <label>Anthropic API key</label>
+          <input id="aiKey" type="password" placeholder="sk-ant-…" spellcheck="false" />
+          <label>Model (everyday — cheapest)</label>
+          <input id="aiModelInput" type="text" placeholder="claude-haiku-4-5-20251001" spellcheck="false" />
+          <label>Deep-mode model (⚡)</label>
+          <input id="aiDeepModelInput" type="text" placeholder="claude-sonnet-4-6" spellcheck="false" />
+          <button id="aiSaveSettings" class="ai-save">Save</button>
+          <p class="ai-hint">Stored encrypted on this machine (Windows DPAPI). You can also set the <code>ANTHROPIC_API_KEY</code> env var. Haiku is the cheapest model.</p>
+        </div>
+
+        <div id="aiMemory" class="ai-settings hidden">
+          <div class="ai-mem-head"><span>Long-term memory</span><button id="aiMemClear" class="ai-mem-clear">Clear all</button></div>
+          <div class="ai-mem-add">
+            <input id="aiMemInput" type="text" placeholder="Add a fact to remember…" spellcheck="false" />
+            <button id="aiMemAdd">Add</button>
+          </div>
+          <div id="aiMemList" class="ai-mem-list"></div>
+          <p class="ai-hint">Persists across sessions and is given to the assistant every time. The current chat is this session's memory — “Clear chat” resets only the session.</p>
+        </div>
+
+        <div id="aiMessages" class="ai-messages"></div>
+
+        <div class="ai-input-wrap">
+          <button id="aiDeepBtn" class="ai-deep" title="Think deeply — escalates to a stronger model with extended reasoning (slower, costs more)">⚡</button>
+          <textarea id="aiInput" rows="1" placeholder="Ask to create, edit, organize, or summarize notes…"></textarea>
+          <button id="aiSendBtn" class="ai-send" title="Send (Enter)" aria-label="Send">
+            <svg class="ic-send" viewBox="0 0 16 16" width="16" height="16"><path d="M2 8l11-5-4 11-2.5-3.5L2 8z" fill="currentColor"/></svg>
+            <svg class="ic-stop" viewBox="0 0 16 16" width="14" height="14"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>
+          </button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- compact floating pill (shown when shrunk) -->
+  <div id="pill" class="pill" title="Hold to move">
+    <img class="pill-logo" src="../assets/logo.png" alt="" />
+    <span class="pill-label">Notes</span>
+    <span class="pill-dot"></span>
+    <button id="pillExpand" class="pill-expand" title="Open Stealth Notes" aria-label="Open">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5h4v4M13.5 2.5l-5 5M6.5 13.5h-4v-4M2.5 13.5l5-5"/></svg>
+    </button>
+  </div>
+
+  <!-- import modal (drag & drop) -->
+  <div id="importModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>Import a file</span>
+        <button id="importClose" class="icon-btn" aria-label="Close">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div id="dropzone" class="dropzone">
+        <div class="dz-idle">
+          <div class="dz-icon">
+            <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4l-4 4M12 4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+          </div>
+          <div class="dz-title">Drag a PDF or Word file here</div>
+          <div class="dz-sub">or <button id="browseBtn" class="dz-browse">browse files</button></div>
+        </div>
+        <div class="dz-busy hidden">
+          <div class="spinner"></div>
+          <div class="dz-title" id="dzBusyLabel">Importing…</div>
+        </div>
+      </div>
+      <p class="modal-hint">Word (.docx) keeps headings, lists, links &amp; tables. PDF extracts text &amp; headings.</p>
+    </div>
+  </div>
+
+  <!-- floating popup menu -->
+  <div id="popMenu" class="pop-menu hidden"></div>
+
+  <script src="../node_modules/quill/dist/quill.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

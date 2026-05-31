@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   // stealth / capture exclusion
@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('api', {
   openDataFolder: () => ipcRenderer.invoke('app:openData'),
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
   exportFile: (payload) => ipcRenderer.invoke('export:save', payload),
+  importBrowse: () => ipcRenderer.invoke('import:browse'),
+  importPath: (p) => ipcRenderer.invoke('import:path', p),
+  getDroppedPath: (file) => { try { return webUtils.getPathForFile(file); } catch { return null; } },
 
   // AI assistant
   ai: {
@@ -38,6 +41,18 @@ contextBridge.exposeInMainWorld('api', {
     onMemoryChanged: (cb) => ipcRenderer.on('memory:changed', () => cb())
   },
   onWorkspaceChanged: (cb) => ipcRenderer.on('workspace:changed', () => cb()),
+
+  // frameless window controls
+  win: {
+    minimize: () => ipcRenderer.invoke('win:minimize'),
+    maximize: () => ipcRenderer.invoke('win:maximize'),
+    close: () => ipcRenderer.invoke('win:close'),
+    isMaximized: () => ipcRenderer.invoke('win:isMaximized'),
+    onState: (cb) => ipcRenderer.on('win:state', (_e, max) => cb(max)),
+    shrink: () => ipcRenderer.invoke('win:shrink'),
+    expand: () => ipcRenderer.invoke('win:expand'),
+    onCompact: (cb) => ipcRenderer.on('compact:changed', (_e, v) => cb(v))
+  },
 
   // self-test (used only when SN_SELFTEST=1)
   selfTest: () => ipcRenderer.invoke('selftest:enabled'),
