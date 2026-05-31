@@ -1,4 +1,4 @@
-<img width="1983" height="793" alt="logo" src="https://github.com/user-attachments/assets/94b7c6ba-0ed5-4da0-a1da-35231ab64f70" />
+<img width="1254" height="1254" alt="Canres - Stealth Note AI" src="https://github.com/user-attachments/assets/bf192966-342a-412d-aff3-f07d6e72f1ed" />
 
 # Stealth Notes
 
