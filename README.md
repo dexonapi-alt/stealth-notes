@@ -7,6 +7,9 @@
   />
 </p>
 
+<img width="1004" height="1004" alt="Canres - Stealth Note AI (1)" src="https://github.com/user-attachments/assets/e9df9ea0-f868-49b1-93ec-084da9b0e39f" />
+
+
 # Stealth Notes
 
 A private, Notion-style notes app that stays **invisible during screen sharing**
