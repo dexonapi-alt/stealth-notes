@@ -51,7 +51,10 @@ contextBridge.exposeInMainWorld('api', {
     onState: (cb) => ipcRenderer.on('win:state', (_e, max) => cb(max)),
     shrink: () => ipcRenderer.invoke('win:shrink'),
     expand: () => ipcRenderer.invoke('win:expand'),
-    onCompact: (cb) => ipcRenderer.on('compact:changed', (_e, v) => cb(v))
+    onCompact: (cb) => ipcRenderer.on('compact:changed', (_e, v) => cb(v)),
+    getAutoPill: () => ipcRenderer.invoke('win:getAutoPill'),
+    setAutoPill: (v) => ipcRenderer.invoke('win:setAutoPill', v),
+    onAutoPillChanged: (cb) => ipcRenderer.on('autopill:changed', (_e, v) => cb(v))
   },
 
   // self-test (used only when SN_SELFTEST=1)

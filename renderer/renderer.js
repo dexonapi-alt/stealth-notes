@@ -64,6 +64,7 @@ let noteSaveTimer = null;
 let treeSaveTimer = null;
 let suppressTextChange = false;
 let uiTheme = 'notion';
+let uiAutoPill = true;
 
 const $tree = document.getElementById('tree');
 const $tabbar = document.getElementById('tabbar');
@@ -623,6 +624,7 @@ const MENUS = {
     { icon: '◧', label: 'Toggle sidebar', action: () => document.getElementById('app').classList.toggle('sidebar-hidden') },
     { icon: '✦', label: 'Toggle assistant panel', action: toggleAssistant },
     { icon: '🧠', label: 'Long-term memory', action: openMemoryPanel },
+    { icon: uiAutoPill ? '✓' : '', label: 'Pill when I switch away', action: () => api.win.setAutoPill(!uiAutoPill) },
     { sep: true },
     { icon: uiTheme === 'notion' ? '✓' : '', label: 'Theme · Notion', action: () => applyTheme('notion') },
     { icon: uiTheme === 'invisible' ? '✓' : '', label: 'Theme · Invisible overlay', action: () => applyTheme('invisible') },
@@ -903,7 +905,7 @@ api.onStealthChanged(paintStealth);
 // ---------------------------------------------------------------------------
 // Frameless window controls
 // ---------------------------------------------------------------------------
-document.getElementById('winMin').addEventListener('click', () => api.win.minimize());
+document.getElementById('winMin').addEventListener('click', () => api.win.shrink());
 document.getElementById('winClose').addEventListener('click', () => api.win.close());
 const $winMax = document.getElementById('winMax');
 $winMax.addEventListener('click', () => api.win.maximize());
@@ -917,9 +919,10 @@ api.win.onState(paintMaxIcon);
 api.win.isMaximized().then(paintMaxIcon);
 
 // compact floating-pill mode
-document.getElementById('winShrink').addEventListener('click', () => api.win.shrink());
 document.getElementById('pillExpand').addEventListener('click', (e) => { e.stopPropagation(); api.win.expand(); });
 api.win.onCompact((c) => document.body.classList.toggle('compact', c));
+api.win.getAutoPill().then((v) => { uiAutoPill = v; }).catch(() => {});
+api.win.onAutoPillChanged((v) => { uiAutoPill = v; });
 
 // theme selector (default Notion; invisible = transparent overlay)
 function applyTheme(t) {

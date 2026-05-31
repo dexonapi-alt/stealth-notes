@@ -43,6 +43,15 @@ function noteFile(id) {
 
 let mainWindow = null;
 let tray = null;
+let dialogOpen = false;   // suppress auto-pill while our own file dialogs are open
+let autoPill = true;      // shrink to the floating pill when focus leaves the app
+let trayAutoPillItem = null;
+
+function setAutoPill(v) {
+  autoPill = !!v;
+  if (trayAutoPillItem) trayAutoPillItem.checked = autoPill;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('autopill:changed', autoPill);
+}
 
 function createTray() {
   try {
@@ -53,11 +62,13 @@ function createTray() {
     const menu = Menu.buildFromTemplate([
       { label: 'Show / Hide', click: () => { if (!mainWindow) return; mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show(); } },
       { label: 'Compact pill', click: () => toggleCompact() },
+      { id: 'autopill', label: 'Pill when I switch away (Alt+Tab)', type: 'checkbox', checked: autoPill, click: (item) => setAutoPill(item.checked) },
       { label: 'Toggle capture invisibility', click: () => toggleStealth() },
       { type: 'separator' },
       { label: 'Quit Stealth Notes', click: () => { app.quit(); } }
     ]);
     tray.setContextMenu(menu);
+    trayAutoPillItem = menu.getMenuItemById('autopill');
     tray.on('click', () => { if (!mainWindow) return; if (mainWindow.isVisible()) mainWindow.focus(); else mainWindow.show(); });
   } catch {}
 }
@@ -107,9 +118,14 @@ function createWindow() {
   // Keep the compact pill floating on top when focus moves elsewhere (Alt+Tab):
   // Windows can demote a topmost window when another app takes the foreground.
   mainWindow.on('blur', () => {
-    if (compact && mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow || mainWindow.isDestroyed() || dialogOpen) return;
+    if (compact) {
+      // already a pill — re-assert topmost (Windows can demote it on focus change)
       mainWindow.setAlwaysOnTop(true, 'screen-saver');
-      mainWindow.showInactive(); // re-show on top without stealing focus
+      mainWindow.moveTop();
+    } else if (autoPill) {
+      // switching away (Alt+Tab) → collapse to the floating pill so notes stay visible
+      enterCompact();
     }
   });
 }
@@ -154,6 +170,8 @@ function exitCompact() {
 function toggleCompact() { if (compact) exitCompact(); else enterCompact(); }
 ipcMain.handle('win:shrink', enterCompact);
 ipcMain.handle('win:expand', exitCompact);
+ipcMain.handle('win:getAutoPill', () => autoPill);
+ipcMain.handle('win:setAutoPill', (_e, v) => { setAutoPill(v); return autoPill; });
 
 // ---- IPC: stealth toggle ----
 function toggleStealth() {
@@ -208,17 +226,20 @@ ipcMain.handle('app:openExternal', (_e, url) => {
 
 // ---- IPC: export current note to a file (native save dialog) ----
 ipcMain.handle('export:save', async (_e, { defaultName, content, ext, filterName }) => {
-  const res = await dialog.showSaveDialog(mainWindow, {
-    title: 'Export note',
-    defaultPath: defaultName,
-    filters: [
-      { name: filterName, extensions: [ext] },
-      { name: 'All Files', extensions: ['*'] }
-    ]
-  });
-  if (res.canceled || !res.filePath) return null;
-  fs.writeFileSync(res.filePath, content, 'utf8');
-  return res.filePath;
+  dialogOpen = true;
+  try {
+    const res = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export note',
+      defaultPath: defaultName,
+      filters: [
+        { name: filterName, extensions: [ext] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+    if (res.canceled || !res.filePath) return null;
+    fs.writeFileSync(res.filePath, content, 'utf8');
+    return res.filePath;
+  } finally { dialogOpen = false; }
 });
 
 // ---- PDF import: extract text into a note (best-effort headings/paragraphs) ----
@@ -321,13 +342,16 @@ ipcMain.handle('import:path', async (_e, p) => {
   catch (e) { return { error: String((e && e.message) || e) }; }
 });
 ipcMain.handle('import:browse', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, {
-    title: 'Import a file',
-    filters: [{ name: 'PDF or Word', extensions: ['pdf', 'docx'] }],
-    properties: ['openFile']
-  });
-  if (res.canceled || !res.filePaths[0]) return null;
-  return res.filePaths[0];
+  dialogOpen = true;
+  try {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: 'Import a file',
+      filters: [{ name: 'PDF or Word', extensions: ['pdf', 'docx'] }],
+      properties: ['openFile']
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    return res.filePaths[0];
+  } finally { dialogOpen = false; }
 });
 
 // ---- IPC: self-test (only meaningful when SN_SELFTEST=1) ----
