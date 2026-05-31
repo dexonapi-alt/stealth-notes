@@ -1,0 +1,34 @@
+{
+  "name": "stealth-notes",
+  "version": "1.0.0",
+  "description": "A Notion-style notes app that stays invisible during Zoom / Google Meet screen sharing (WDA_EXCLUDEFROMCAPTURE).",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.local.stealthnotes",
+    "productName": "Stealth Notes",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "node_modules/quill/dist/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1",
+    "quill": "^2.0.3"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}
