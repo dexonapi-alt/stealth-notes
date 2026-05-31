@@ -103,6 +103,15 @@ function createWindow() {
 
   mainWindow.on('maximize', () => mainWindow.webContents.send('win:state', true));
   mainWindow.on('unmaximize', () => mainWindow.webContents.send('win:state', false));
+
+  // Keep the compact pill floating on top when focus moves elsewhere (Alt+Tab):
+  // Windows can demote a topmost window when another app takes the foreground.
+  mainWindow.on('blur', () => {
+    if (compact && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      mainWindow.showInactive(); // re-show on top without stealing focus
+    }
+  });
 }
 
 // ---- IPC: custom window controls (frameless) ----
