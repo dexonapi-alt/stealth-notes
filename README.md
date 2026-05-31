@@ -3,12 +3,9 @@
     width="240"
     height="240"
     alt="Canres - Stealth Note AI"
-    src="https://github.com/user-attachments/assets/4281ee48-da00-4146-af8a-7f4670ba2564"
+    src="https://github.com/user-attachments/assets/d8caefba-e13e-4074-b455-28b06d8ca458"
   />
 </p>
-
-<img width="500" height="500" alt="Canres_-_Stealth_Note_AI__1_-removebg-preview" src="https://github.com/user-attachments/assets/317ca3e0-4eef-4cff-b0aa-9ed7812df19f" />
-
 
 # Stealth Notes
 
