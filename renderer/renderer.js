@@ -920,7 +920,17 @@ api.win.isMaximized().then(paintMaxIcon);
 
 // compact floating-pill mode
 document.getElementById('pillExpand').addEventListener('click', (e) => { e.stopPropagation(); api.win.expand(); });
-api.win.onCompact((c) => document.body.classList.toggle('compact', c));
+let savedScroll = 0;
+api.win.onCompact((c) => {
+  const ed = document.getElementById('editor');
+  if (c) {
+    if (ed) savedScroll = ed.scrollTop;       // remember scroll before collapsing
+    document.body.classList.add('compact');
+  } else {
+    document.body.classList.remove('compact'); // restore scroll after re-showing
+    requestAnimationFrame(() => { const e = document.getElementById('editor'); if (e) e.scrollTop = savedScroll; });
+  }
+});
 api.win.getAutoPill().then((v) => { uiAutoPill = v; }).catch(() => {});
 api.win.onAutoPillChanged((v) => { uiAutoPill = v; });
 
