@@ -7,7 +7,7 @@
   />
 </p>
 
-<img width="1004" height="1004" alt="Canres - Stealth Note AI (1)" src="https://github.com/user-attachments/assets/e9df9ea0-f868-49b1-93ec-084da9b0e39f" />
+<img width="500" height="500" alt="Canres_-_Stealth_Note_AI__1_-removebg-preview" src="https://github.com/user-attachments/assets/317ca3e0-4eef-4cff-b0aa-9ed7812df19f" />
 
 
 # Stealth Notes
