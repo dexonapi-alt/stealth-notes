@@ -315,13 +315,22 @@ function extractTableFills(xml) {
   return tables;
 }
 
+// Text/code file extensions we import as a line-numbered code block.
+const CODE_EXTS = new Set([
+  'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'py', 'rb', 'php', 'java', 'kt', 'kts', 'go', 'rs',
+  'c', 'h', 'cpp', 'cc', 'hpp', 'cs', 'swift', 'scala', 'dart', 'lua', 'r', 'pl', 'sh', 'bash',
+  'zsh', 'ps1', 'sql', 'json', 'jsonc', 'yaml', 'yml', 'toml', 'ini', 'xml', 'html', 'htm',
+  'css', 'scss', 'sass', 'less', 'vue', 'svelte', 'md', 'markdown', 'txt', 'log', 'csv', 'env'
+]);
+
 // Convert a file at a path into note data (renderer builds the final note).
 async function importFromPath(p) {
   const ext = path.extname(p).toLowerCase();
-  const name = path.basename(p).replace(/\.(pdf|docx)$/i, '') || 'Imported file';
+  const extKey = ext.replace(/^\./, '');
+  const base = path.basename(p);
   if (ext === '.pdf') {
     const delta = await parsePdfToDelta(fs.readFileSync(p));
-    return { kind: 'pdf', name, delta };
+    return { kind: 'pdf', name: base.replace(/\.pdf$/i, ''), delta };
   }
   if (ext === '.docx') {
     const mammoth = require('mammoth');
@@ -333,9 +342,16 @@ async function importFromPath(p) {
       const xmlFile = zip.file('word/document.xml');
       if (xmlFile) tableFills = extractTableFills(await xmlFile.async('string'));
     } catch {}
-    return { kind: 'docx', name, html: result.value || '', tableFills };
+    return { kind: 'docx', name: base.replace(/\.docx$/i, ''), html: result.value || '', tableFills };
   }
-  return { error: 'Unsupported file type — use PDF or .docx' };
+  if (CODE_EXTS.has(extKey) || !ext) {
+    try {
+      if (fs.statSync(p).size > 5 * 1024 * 1024) return { error: 'File too large (max 5 MB)' };
+    } catch {}
+    const text = fs.readFileSync(p, 'utf8');
+    return { kind: 'code', name: base, text }; // keep the extension in the note name
+  }
+  return { error: 'Unsupported file type' };
 }
 ipcMain.handle('import:path', async (_e, p) => {
   try { return await importFromPath(p); }
@@ -346,11 +362,14 @@ ipcMain.handle('import:browse', async () => {
   try {
     const res = await dialog.showOpenDialog(mainWindow, {
       title: 'Import a file',
-      filters: [{ name: 'PDF or Word', extensions: ['pdf', 'docx'] }],
-      properties: ['openFile']
+      filters: [
+        { name: 'Notes & code', extensions: ['pdf', 'docx', 'txt', 'md', 'js', 'ts', 'jsx', 'tsx', 'py', 'json', 'html', 'css', 'java', 'c', 'cpp', 'cs', 'go', 'rs', 'rb', 'php', 'sh', 'yml', 'yaml', 'sql', 'xml'] },
+        { name: 'All Files', extensions: ['*'] }
+      ],
+      properties: ['openFile', 'multiSelections']
     });
-    if (res.canceled || !res.filePaths[0]) return null;
-    return res.filePaths[0];
+    if (res.canceled || !res.filePaths.length) return null;
+    return res.filePaths;
   } finally { dialogOpen = false; }
 });
 

@@ -65,6 +65,7 @@ let treeSaveTimer = null;
 let suppressTextChange = false;
 let uiTheme = 'notion';
 let uiAutoPill = true;
+let codeIndent = 4;
 
 const $tree = document.getElementById('tree');
 const $tabbar = document.getElementById('tabbar');
@@ -265,6 +266,11 @@ function renderNode(node, depth) {
   row.addEventListener('drop', (e) => {
     e.preventDefault(); e.stopPropagation();
     row.classList.remove('drop-target');
+    if (e.dataTransfer.files && e.dataTransfer.files.length) {
+      const paths = Array.from(e.dataTransfer.files).map((f) => api.getDroppedPath(f)).filter(Boolean);
+      importPaths(paths, node.type === 'folder' ? node.id : null);
+      return;
+    }
     const dragId = e.dataTransfer.getData('text/plain');
     moveNode(dragId, node.id, node.type === 'folder' ? 'inside' : 'after');
   });
@@ -629,6 +635,10 @@ const MENUS = {
     { icon: uiTheme === 'notion' ? '✓' : '', label: 'Theme · Notion', action: () => applyTheme('notion') },
     { icon: uiTheme === 'invisible' ? '✓' : '', label: 'Theme · Invisible overlay', action: () => applyTheme('invisible') },
     { sep: true },
+    { icon: codeIndent === 2 ? '✓' : '', label: 'Code indent · 2', action: () => setCodeIndent(2) },
+    { icon: codeIndent === 4 ? '✓' : '', label: 'Code indent · 4', action: () => setCodeIndent(4) },
+    { icon: codeIndent === 8 ? '✓' : '', label: 'Code indent · 8', action: () => setCodeIndent(8) },
+    { sep: true },
     {
       icon: '👁', label: 'Toggle capture invisibility',
       action: async () => paintStealth(await api.toggleStealth())
@@ -773,42 +783,69 @@ function htmlToDelta(html, tableFills) {
   return { ops };
 }
 
-async function doImport(filePath) {
-  if (!filePath) return;
-  setImportBusy(true, 'Reading file…');
+// code/text file -> Quill code-block delta (one block, line-numbered via CSS)
+function codeToDelta(text) {
+  const lines = String(text == null ? '' : text).replace(/\r\n/g, '\n').split('\n'); // keep tabs so the indent config (tab-size) applies
+  const ops = [];
+  lines.forEach((line) => {
+    if (line) ops.push({ insert: line });
+    ops.push({ insert: '\n', attributes: { 'code-block': true } });
+  });
+  if (!ops.length) ops.push({ insert: '\n' });
+  return { ops };
+}
+
+// import one file into the tree (optionally inside a folder); returns {id,name}|null
+async function importFile(filePath, parentId) {
   let res;
   try { res = await api.importPath(filePath); } catch (e) { res = { error: String(e) }; }
-  if (!res || res.error) { setImportBusy(false); toast('Import failed: ' + ((res && res.error) || 'unknown')); return; }
-  setImportBusy(true, 'Building note…');
-  const delta = res.kind === 'docx' ? htmlToDelta(res.html, res.tableFills) : (res.delta || { ops: [{ insert: '\n' }] });
+  if (!res || res.error) { toast('Import failed: ' + ((res && res.error) || 'unknown')); return null; }
+  let delta;
+  if (res.kind === 'docx') delta = htmlToDelta(res.html, res.tableFills);
+  else if (res.kind === 'code') delta = codeToDelta(res.text);
+  else delta = res.delta || { ops: [{ insert: '\n' }] };
   const id = uid();
-  data.tree.push({ id, type: 'note', name: res.name });
+  const node = { id, type: 'note', name: res.name };
+  const parent = parentId ? locate(parentId) : null;
+  if (parent && parent.node.type === 'folder') { parent.node.children = parent.node.children || []; parent.node.children.push(node); parent.node.expanded = true; }
+  else data.tree.push(node);
   await api.saveTree(data);
   await api.saveNote(id, { ops: delta.ops });
   render();
   renderTabs();
-  selectNote(id);
-  closeImportModal();
-  toast('Imported “' + res.name + '”' + (res.kind === 'pdf' ? ' — PDF text & headings' : ''));
+  return { id, name: res.name };
+}
+
+// import many files (from the dialog or a drag-drop), into an optional folder
+async function importPaths(paths, parentId) {
+  const list = (paths || []).filter(Boolean);
+  if (!list.length) return;
+  setImportBusy(true, 'Importing…');
+  let last = null;
+  for (const p of list) { const r = await importFile(p, parentId); if (r) last = r; }
+  setImportBusy(false);
+  if (last) {
+    selectNote(last.id);
+    closeImportModal();
+    toast(list.length > 1 ? `Imported ${list.length} files` : `Imported “${last.name}”`);
+  }
 }
 
 function setupImport() {
   document.getElementById('importClose').addEventListener('click', closeImportModal);
   $importModal.addEventListener('click', (e) => { if (e.target === $importModal) closeImportModal(); });
   document.getElementById('browseBtn').addEventListener('click', async () => {
-    const p = await api.importBrowse();
-    if (p) doImport(p);
+    const paths = await api.importBrowse();
+    if (paths && paths.length) importPaths(paths, null);
   });
   ['dragenter', 'dragover'].forEach((ev) => $dropzone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); $dropzone.classList.add('over'); }));
   ['dragleave', 'dragend'].forEach((ev) => $dropzone.addEventListener(ev, (e) => { e.preventDefault(); $dropzone.classList.remove('over'); }));
   $dropzone.addEventListener('drop', (e) => {
     e.preventDefault(); e.stopPropagation();
     $dropzone.classList.remove('over');
-    const file = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (!file) return;
-    const p = api.getDroppedPath(file);
-    if (!p) { toast('Could not read the dropped file path.'); return; }
-    doImport(p);
+    const paths = Array.from(e.dataTransfer.files || []).map((f) => api.getDroppedPath(f)).filter(Boolean);
+    if (!paths.length) { toast('Could not read the dropped file path.'); return; }
+    importPaths(paths, null);
   });
 }
 setupImport();
@@ -942,6 +979,14 @@ function applyTheme(t) {
 }
 try { applyTheme(localStorage.getItem('sn-theme') || 'notion'); } catch { applyTheme('notion'); }
 
+// code indentation (tab width) config
+function setCodeIndent(n) {
+  codeIndent = Number(n) || 4;
+  document.body.style.setProperty('--code-tab', String(codeIndent));
+  try { localStorage.setItem('sn-code-tab', String(codeIndent)); } catch {}
+}
+(() => { let v = 4; try { v = Number(localStorage.getItem('sn-code-tab')) || 4; } catch {} setCodeIndent(v); })();
+
 // overlay opacity slider (only visible in invisible theme)
 const $ovl = document.getElementById('ovlOpacity');
 function applyOverlayOpacity(v) { document.body.style.setProperty('--ovl', (Number(v) / 100).toFixed(2)); }
@@ -977,6 +1022,20 @@ window.addEventListener('mousemove', (e) => {
   $sidebar.style.width = Math.max(200, Math.min(460, e.clientX)) + 'px';
 });
 window.addEventListener('mouseup', () => { resizing = false; document.body.style.cursor = ''; });
+
+// drop external files anywhere on the sidebar to import them (root level)
+$sidebar.addEventListener('dragover', (e) => {
+  if (e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); $sidebar.classList.add('file-drop'); }
+});
+$sidebar.addEventListener('dragleave', (e) => { if (e.target === $sidebar) $sidebar.classList.remove('file-drop'); });
+$sidebar.addEventListener('drop', (e) => {
+  $sidebar.classList.remove('file-drop');
+  if (e.dataTransfer.files && e.dataTransfer.files.length) {
+    e.preventDefault();
+    const paths = Array.from(e.dataTransfer.files).map((f) => api.getDroppedPath(f)).filter(Boolean);
+    importPaths(paths, null);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Shortcuts + lifecycle
