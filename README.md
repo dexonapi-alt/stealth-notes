@@ -20,6 +20,7 @@ in a window the camera can't see.
 </div>
 
 ---
+<img width="1919" height="1079" alt="live demo" src="https://github.com/user-attachments/assets/0dec3561-68f5-458a-b9a4-ca89f54cfa82" />
 
 ## The problem
 
