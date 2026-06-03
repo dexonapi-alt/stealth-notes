@@ -963,19 +963,27 @@ api.win.isMaximized().then(paintMaxIcon);
 // compact floating-pill mode
 document.getElementById('pillExpand').addEventListener('click', (e) => { e.stopPropagation(); api.win.expand(); });
 let savedScroll = 0;
+let freezeScroll = false;
+// Track the real reading scroll continuously. The window resizes to the pill
+// *before* the compact event reaches us, so reading scrollTop on the event is
+// too late — instead remember it as the user scrolls, ignoring resize/focus jumps.
+(function trackEditorScroll() {
+  const e = document.getElementById('editor');
+  if (e) e.addEventListener('scroll', () => {
+    if (!freezeScroll && !document.body.classList.contains('compact')) savedScroll = e.scrollTop;
+  });
+})();
 api.win.onCompact((c) => {
-  const ed = document.getElementById('editor');
   if (c) {
-    if (ed) savedScroll = ed.scrollTop;       // remember scroll before collapsing
+    freezeScroll = true; // ignore the clamp/refocus scroll jumps during the transition
     document.body.classList.add('compact');
   } else {
     document.body.classList.remove('compact');
-    // restore scroll repeatedly — when the window refocuses on expand, Quill
-    // scrolls to the caret (end of note), so we re-apply after that settles
     const restore = () => { const e = document.getElementById('editor'); if (e) e.scrollTop = savedScroll; };
     requestAnimationFrame(restore);
-    setTimeout(restore, 80);
-    setTimeout(restore, 220);
+    setTimeout(restore, 120);
+    setTimeout(() => { restore(); freezeScroll = false; }, 320);
+    setTimeout(restore, 480);
   }
 });
 api.win.getAutoPill().then((v) => { uiAutoPill = v; }).catch(() => {});
