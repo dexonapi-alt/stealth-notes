@@ -64,7 +64,8 @@ let noteSaveTimer = null;
 let treeSaveTimer = null;
 let suppressTextChange = false;
 let uiTheme = 'notion';
-let uiAutoPill = true;
+let uiAutoPill = false;
+let uiOnTop = true;
 let codeIndent = 4;
 
 const $tree = document.getElementById('tree');
@@ -630,7 +631,8 @@ const MENUS = {
     { icon: '◧', label: 'Toggle sidebar', action: () => document.getElementById('app').classList.toggle('sidebar-hidden') },
     { icon: '✦', label: 'Toggle assistant panel', action: toggleAssistant },
     { icon: '🧠', label: 'Long-term memory', action: openMemoryPanel },
-    { icon: uiAutoPill ? '✓' : '', label: 'Pill when I switch away', action: () => api.win.setAutoPill(!uiAutoPill) },
+    { icon: uiOnTop ? '✓' : '', label: 'Always on top', action: () => api.win.setOnTop(!uiOnTop) },
+    { icon: uiAutoPill ? '✓' : '', label: 'Pill when I switch away (Alt+Tab)', action: () => api.win.setAutoPill(!uiAutoPill) },
     { sep: true },
     { icon: uiTheme === 'notion' ? '✓' : '', label: 'Theme · Notion', action: () => applyTheme('notion') },
     { icon: uiTheme === 'invisible' ? '✓' : '', label: 'Theme · Invisible overlay', action: () => applyTheme('invisible') },
@@ -970,6 +972,8 @@ api.win.onCompact((c) => {
 });
 api.win.getAutoPill().then((v) => { uiAutoPill = v; }).catch(() => {});
 api.win.onAutoPillChanged((v) => { uiAutoPill = v; });
+api.win.getOnTop().then((v) => { uiOnTop = v; }).catch(() => {});
+api.win.onOnTopChanged((v) => { uiOnTop = v; });
 
 // theme selector (default Notion; invisible = transparent overlay)
 function applyTheme(t) {

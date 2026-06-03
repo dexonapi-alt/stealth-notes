@@ -44,13 +44,23 @@ function noteFile(id) {
 let mainWindow = null;
 let tray = null;
 let dialogOpen = false;   // suppress auto-pill while our own file dialogs are open
-let autoPill = true;      // shrink to the floating pill when focus leaves the app
+let autoPill = false;     // when on: shrink to the pill when focus leaves the app (Alt+Tab)
+let onTop = true;         // keep the window above other apps
 let trayAutoPillItem = null;
+let trayOnTopItem = null;
 
 function setAutoPill(v) {
   autoPill = !!v;
   if (trayAutoPillItem) trayAutoPillItem.checked = autoPill;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('autopill:changed', autoPill);
+}
+function setOnTop(v) {
+  onTop = !!v;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setAlwaysOnTop(onTop, compact ? 'screen-saver' : 'floating');
+    mainWindow.webContents.send('ontop:changed', onTop);
+  }
+  if (trayOnTopItem) trayOnTopItem.checked = onTop;
 }
 
 function createTray() {
@@ -62,6 +72,7 @@ function createTray() {
     const menu = Menu.buildFromTemplate([
       { label: 'Show / Hide', click: () => { if (!mainWindow) return; mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show(); } },
       { label: 'Compact pill', click: () => toggleCompact() },
+      { id: 'ontop', label: 'Always on top', type: 'checkbox', checked: onTop, click: (item) => setOnTop(item.checked) },
       { id: 'autopill', label: 'Pill when I switch away (Alt+Tab)', type: 'checkbox', checked: autoPill, click: (item) => setAutoPill(item.checked) },
       { label: 'Toggle capture invisibility', click: () => toggleStealth() },
       { type: 'separator' },
@@ -69,6 +80,7 @@ function createTray() {
     ]);
     tray.setContextMenu(menu);
     trayAutoPillItem = menu.getMenuItemById('autopill');
+    trayOnTopItem = menu.getMenuItemById('ontop');
     tray.on('click', () => { if (!mainWindow) return; if (mainWindow.isVisible()) mainWindow.focus(); else mainWindow.show(); });
   } catch {}
 }
@@ -93,6 +105,7 @@ function createWindow() {
     backgroundColor: '#00000000', // transparent base; CSS paints the solid theme
     transparent: true,            // enables the "invisible overlay" theme
     skipTaskbar: true,            // run discreetly — no taskbar button (use tray/pill)
+    alwaysOnTop: true,            // float over the meeting; toggle in View
     title: 'Stealth Notes',
     icon: path.join(__dirname, 'assets', 'logo.png'),
     frame: false,           // Notion-style: no OS title bar, we draw our own header
@@ -159,7 +172,7 @@ function enterCompact() {
 }
 function exitCompact() {
   if (!mainWindow || !compact) return;
-  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setAlwaysOnTop(onTop, 'floating'); // keep the full window on top if enabled
   mainWindow.setMinimumSize(720, 480);
   mainWindow.setResizable(true);
   if (savedState) { if (savedState.max) mainWindow.maximize(); else mainWindow.setBounds(savedState.bounds); }
@@ -172,6 +185,8 @@ ipcMain.handle('win:shrink', enterCompact);
 ipcMain.handle('win:expand', exitCompact);
 ipcMain.handle('win:getAutoPill', () => autoPill);
 ipcMain.handle('win:setAutoPill', (_e, v) => { setAutoPill(v); return autoPill; });
+ipcMain.handle('win:getOnTop', () => onTop);
+ipcMain.handle('win:setOnTop', (_e, v) => { setOnTop(v); return onTop; });
 
 // ---- IPC: stealth toggle ----
 function toggleStealth() {
