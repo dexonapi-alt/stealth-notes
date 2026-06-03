@@ -408,7 +408,10 @@ async function selectNote(id) {
   void cont.offsetWidth; // reflow → replay animation
   cont.classList.add('enter');
 
+  // open notes at the top (caret at start), not scrolled to the end
+  quill.setSelection(0, 0, 'silent');
   quill.focus();
+  cont.scrollTop = 0;
   if (typeof aiSyncContext === 'function') aiSyncContext();
 }
 
@@ -966,8 +969,13 @@ api.win.onCompact((c) => {
     if (ed) savedScroll = ed.scrollTop;       // remember scroll before collapsing
     document.body.classList.add('compact');
   } else {
-    document.body.classList.remove('compact'); // restore scroll after re-showing
-    requestAnimationFrame(() => { const e = document.getElementById('editor'); if (e) e.scrollTop = savedScroll; });
+    document.body.classList.remove('compact');
+    // restore scroll repeatedly — when the window refocuses on expand, Quill
+    // scrolls to the caret (end of note), so we re-apply after that settles
+    const restore = () => { const e = document.getElementById('editor'); if (e) e.scrollTop = savedScroll; };
+    requestAnimationFrame(restore);
+    setTimeout(restore, 80);
+    setTimeout(restore, 220);
   }
 });
 api.win.getAutoPill().then((v) => { uiAutoPill = v; }).catch(() => {});
