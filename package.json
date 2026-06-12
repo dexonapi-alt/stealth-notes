@@ -15,6 +15,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "agent.js",
+      "notes-md.js",
       "renderer/**/*",
       "assets/**/*",
       "node_modules/quill/dist/**/*"

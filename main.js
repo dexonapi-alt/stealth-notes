@@ -70,7 +70,7 @@ function createTray() {
     tray = new Tray(img);
     tray.setToolTip('Stealth Notes');
     const menu = Menu.buildFromTemplate([
-      { label: 'Show / Hide', click: () => { if (!mainWindow) return; mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show(); } },
+      { label: 'Show / Hide', click: () => { if (!mainWindow) return; if (mainWindow.isMinimized()) mainWindow.restore(); else if (mainWindow.isVisible()) { mainWindow.hide(); return; } mainWindow.show(); } },
       { label: 'Compact pill', click: () => toggleCompact() },
       { id: 'ontop', label: 'Always on top', type: 'checkbox', checked: onTop, click: (item) => setOnTop(item.checked) },
       { id: 'autopill', label: 'Pill when I switch away (Alt+Tab)', type: 'checkbox', checked: autoPill, click: (item) => setAutoPill(item.checked) },
@@ -81,7 +81,7 @@ function createTray() {
     tray.setContextMenu(menu);
     trayAutoPillItem = menu.getMenuItemById('autopill');
     trayOnTopItem = menu.getMenuItemById('ontop');
-    tray.on('click', () => { if (!mainWindow) return; if (mainWindow.isVisible()) mainWindow.focus(); else mainWindow.show(); });
+    tray.on('click', () => { if (!mainWindow) return; if (mainWindow.isMinimized()) mainWindow.restore(); if (mainWindow.isVisible()) mainWindow.focus(); else mainWindow.show(); });
   } catch {}
 }
 // Hidden from capture by default. SN_NO_STEALTH=1 starts visible (used only for
@@ -128,10 +128,25 @@ function createWindow() {
   mainWindow.on('maximize', () => mainWindow.webContents.send('win:state', true));
   mainWindow.on('unmaximize', () => mainWindow.webContents.send('win:state', false));
 
+  // Coming back from a real minimize (via taskbar OR the tray's show()): restore
+  // discreet mode (no taskbar button) and re-apply always-on-top. The pill
+  // manages its own flags, so skip it while compact.
+  const leaveMinimized = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    minimizing = false;
+    if (compact) return;
+    mainWindow.setSkipTaskbar(true);
+    mainWindow.setAlwaysOnTop(onTop, 'floating');
+  };
+  mainWindow.on('restore', leaveMinimized);
+  mainWindow.on('show', leaveMinimized);
+
   // Keep the compact pill floating on top when focus moves elsewhere (Alt+Tab):
   // Windows can demote a topmost window when another app takes the foreground.
   mainWindow.on('blur', () => {
     if (!mainWindow || mainWindow.isDestroyed() || dialogOpen) return;
+    // a deliberate minimize also blurs the window — don't let it turn into a pill
+    if (minimizing || mainWindow.isMinimized()) return;
     if (compact) {
       // already a pill — re-assert topmost (Windows can demote it on focus change)
       mainWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -144,7 +159,22 @@ function createWindow() {
 }
 
 // ---- IPC: custom window controls (frameless) ----
-ipcMain.handle('win:minimize', () => { if (mainWindow) mainWindow.minimize(); });
+// Real OS minimize. The window normally runs with skipTaskbar + alwaysOnTop
+// (discreet, floats over calls). Both of those fight a normal minimize on
+// Windows — an always-on-top window won't drop a restorable taskbar button — so
+// while minimizing we surface the taskbar button and clear always-on-top, then
+// the 'restore' handler puts both back. Electron preserves the window bounds, so
+// it returns at the same size and position (not the pill). `minimizing` stops the
+// blur handler from converting this into a pill.
+let minimizing = false;
+ipcMain.handle('win:minimize', () => {
+  if (!mainWindow) return;
+  if (compact) exitCompact();      // never minimize while collapsed to the pill
+  minimizing = true;
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setSkipTaskbar(false);
+  mainWindow.minimize();
+});
 ipcMain.handle('win:maximize', () => {
   if (!mainWindow) return false;
   if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();

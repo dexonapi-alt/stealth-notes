@@ -37,6 +37,15 @@ const LineBackground = new Parchment.ClassAttributor('lineBackground', 'hlblock'
 });
 Quill.register(LineBackground, true);
 
+// Transient inline highlight for the Ctrl+F find feature. It paints matches via
+// CSS classes (shl-hit / shl-cur) and is never written to disk — saveNote()
+// strips the `searchHl` attribute before persisting (see cleanContents()).
+const SearchHighlight = new Parchment.ClassAttributor('searchHl', 'shl', {
+  scope: Parchment.Scope.INLINE,
+  whitelist: ['hit', 'cur']
+});
+Quill.register(SearchHighlight, true);
+
 // Bubble theme = formatting hidden until text is selected, then a floating bar.
 const quill = new Quill('#editor', {
   theme: 'bubble',
@@ -138,16 +147,28 @@ function scheduleTreeSave() {
   clearTimeout(treeSaveTimer);
   treeSaveTimer = setTimeout(() => api.saveTree(data), 250);
 }
+// Snapshot the document for persistence, dropping the transient find-highlight
+// attribute so search styling never leaks into the saved note.
+function cleanContents() {
+  const delta = quill.getContents();
+  (delta.ops || []).forEach((op) => {
+    if (op.attributes && 'searchHl' in op.attributes) {
+      delete op.attributes.searchHl;
+      if (!Object.keys(op.attributes).length) delete op.attributes;
+    }
+  });
+  return delta;
+}
 function scheduleNoteSave() {
   if (!currentNoteId) return;
   clearTimeout(noteSaveTimer);
   const id = currentNoteId;
-  noteSaveTimer = setTimeout(() => api.saveNote(id, quill.getContents()), 400);
+  noteSaveTimer = setTimeout(() => api.saveNote(id, cleanContents()), 400);
 }
 function flushNoteSave() {
   if (!currentNoteId) return;
   clearTimeout(noteSaveTimer);
-  api.saveNote(currentNoteId, quill.getContents());
+  api.saveNote(currentNoteId, cleanContents());
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +400,7 @@ function reorderTab(fromId, toId) {
 // ---------------------------------------------------------------------------
 async function selectNote(id) {
   if (id === currentNoteId) return;
+  if (find.open) findClose();
   flushNoteSave();
 
   const found = locate(id);
@@ -411,11 +433,13 @@ async function selectNote(id) {
   // open notes at the top (caret at start), not scrolled to the end
   quill.setSelection(0, 0, 'silent');
   quill.focus();
-  cont.scrollTop = 0;
+  quill.root.scrollTop = 0; // .ql-editor is the real scroll container
+  savedScroll = 0;          // reset the pill-expand restore target for the new note
   if (typeof aiSyncContext === 'function') aiSyncContext();
 }
 
 function clearSelection() {
+  if (find.open) findClose();
   flushNoteSave();
   currentNoteId = null;
   $title.value = '';
@@ -862,7 +886,7 @@ function applyCellColor(cell, color) {
   if (color) cell.style.backgroundColor = color;
   else cell.style.removeProperty('background-color');
   // the htmlblock's value is its live innerHTML, so getContents captures the change
-  if (currentNoteId) { clearTimeout(noteSaveTimer); api.saveNote(currentNoteId, quill.getContents()); }
+  if (currentNoteId) { clearTimeout(noteSaveTimer); api.saveNote(currentNoteId, cleanContents()); }
 }
 function openCellColorMenu(cell, x, y) {
   const sw = (c) => `<span style="display:inline-block;width:13px;height:13px;border-radius:3px;border:1px solid rgba(0,0,0,.15);background:${c}"></span>`;
@@ -896,9 +920,14 @@ function toast(msg) {
 // ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
-quill.on('text-change', () => {
+quill.on('text-change', (delta, old, source) => {
   if (suppressTextChange || !currentNoteId) return;
   scheduleNoteSave();
+  // keep find results aligned after the user edits while the bar is open
+  if (find.open && source === 'user') {
+    clearTimeout(find.editTimer);
+    find.editTimer = setTimeout(() => findRun(true), 150);
+  }
 });
 
 $title.addEventListener('input', () => {
@@ -947,7 +976,8 @@ api.onStealthChanged(paintStealth);
 // ---------------------------------------------------------------------------
 // Frameless window controls
 // ---------------------------------------------------------------------------
-document.getElementById('winMin').addEventListener('click', () => api.win.shrink());
+document.getElementById('winMin').addEventListener('click', () => api.win.minimize());
+document.getElementById('winPill').addEventListener('click', () => api.win.shrink());
 document.getElementById('winClose').addEventListener('click', () => api.win.close());
 const $winMax = document.getElementById('winMax');
 $winMax.addEventListener('click', () => api.win.maximize());
@@ -963,28 +993,54 @@ api.win.isMaximized().then(paintMaxIcon);
 // compact floating-pill mode
 document.getElementById('pillExpand').addEventListener('click', (e) => { e.stopPropagation(); api.win.expand(); });
 let savedScroll = 0;
-let freezeScroll = false;
-// Track the real reading scroll continuously. The window resizes to the pill
-// *before* the compact event reaches us, so reading scrollTop on the event is
-// too late — instead remember it as the user scrolls, ignoring resize/focus jumps.
-(function trackEditorScroll() {
-  const e = document.getElementById('editor');
-  if (e) e.addEventListener('scroll', () => {
-    if (!freezeScroll && !document.body.classList.contains('compact')) savedScroll = e.scrollTop;
+let pinScroll = false;     // hold the editor at savedScroll during the expand transition
+let pinSafety = null;
+// IMPORTANT: the actual scroll container is .ql-editor (Quill's own CSS sets it
+// to height:100%; overflow-y:auto), NOT the #editor / .ql-container wrapper.
+// Reading/writing scrollTop on #editor is a no-op, which is why earlier attempts
+// only "worked" at the top (nothing to restore) and jumped to the caret otherwise.
+const $editorEl = quill.root;
+// Track the real reading position continuously, and "pin" it on expand. On
+// expand the editor's caret gets scrolled into view when the window re-activates
+// — if you were scrolled down (caret below the top) that yanks the view to the
+// bottom. It fires at an unpredictable time, so instead of racing it with timers
+// we pin: any scroll while pinned is slammed back to the saved position, and we
+// don't record a new savedScroll while pinned (so the stray jump can't corrupt
+// it). The pin is released by genuine user input (below), not a timer, so a late
+// jump is still caught. The clientHeight guard ignores the clamp the browser
+// produces while the editor is collapsed into the pill.
+function unpinScroll() {
+  if (!pinScroll) return;
+  pinScroll = false;
+  clearTimeout(pinSafety);
+}
+if ($editorEl) {
+  $editorEl.addEventListener('scroll', () => {
+    if (pinScroll) {
+      if ($editorEl.scrollTop !== savedScroll) $editorEl.scrollTop = savedScroll;
+      return;
+    }
+    if (!document.body.classList.contains('compact') && $editorEl.clientHeight > 120) {
+      savedScroll = $editorEl.scrollTop;
+    }
   });
-})();
+  // any deliberate interaction releases the pin so the user can move freely
+  ['wheel', 'mousedown', 'keydown', 'touchstart'].forEach((ev) =>
+    $editorEl.addEventListener(ev, unpinScroll, { passive: true }));
+}
 api.win.onCompact((c) => {
-  if (c) {
-    freezeScroll = true; // ignore the clamp/refocus scroll jumps during the transition
-    document.body.classList.add('compact');
-  } else {
-    document.body.classList.remove('compact');
-    const restore = () => { const e = document.getElementById('editor'); if (e) e.scrollTop = savedScroll; };
-    requestAnimationFrame(restore);
-    setTimeout(restore, 120);
-    setTimeout(() => { restore(); freezeScroll = false; }, 320);
-    setTimeout(restore, 480);
-  }
+  document.body.classList.toggle('compact', c);
+  if (c || !$editorEl) return;
+  // expand: re-assert the saved position and pin it until the user interacts
+  // (covers the display re-show reset + the late caret-into-view jump).
+  pinScroll = true;
+  clearTimeout(pinSafety);
+  pinSafety = setTimeout(unpinScroll, 2000); // safety release if no interaction
+  const set = () => { $editorEl.scrollTop = savedScroll; };
+  set();
+  requestAnimationFrame(set);
+  setTimeout(set, 60);
+  setTimeout(set, 200);
 });
 api.win.getAutoPill().then((v) => { uiAutoPill = v; }).catch(() => {});
 api.win.onAutoPillChanged((v) => { uiAutoPill = v; });
@@ -1058,12 +1114,120 @@ $sidebar.addEventListener('drop', (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// In-note find (Ctrl+F) — search the open note, highlight matches, jump to each
+// ---------------------------------------------------------------------------
+const $findBar = document.getElementById('findBar');
+const $findInput = document.getElementById('findInput');
+const $findCount = document.getElementById('findCount');
+const $findPrev = document.getElementById('findPrev');
+const $findNext = document.getElementById('findNext');
+const find = { open: false, matches: [], idx: -1, editTimer: null };
+
+// A string whose character positions line up 1:1 with Quill indices (each
+// non-text embed counts as a single index), so match offsets map straight back.
+function buildFindText() {
+  let s = '';
+  (quill.getContents().ops || []).forEach((op) => {
+    s += typeof op.insert === 'string' ? op.insert : '\uFFFC';
+  });
+  return s;
+}
+function computeMatches(text, q) {
+  const out = [];
+  if (!q) return out;
+  const hay = text.toLowerCase();
+  const needle = q.toLowerCase();
+  let i = hay.indexOf(needle);
+  while (i !== -1) { out.push({ index: i, length: q.length }); i = hay.indexOf(needle, i + needle.length); }
+  return out;
+}
+function findClearHighlights() {
+  find.matches.forEach((m) => quill.formatText(m.index, m.length, 'searchHl', false, 'silent'));
+}
+function findApplyHighlights() {
+  find.matches.forEach((m, k) => quill.formatText(m.index, m.length, 'searchHl', k === find.idx ? 'cur' : 'hit', 'silent'));
+}
+function findScrollToCurrent() {
+  // the current match carries the shl-cur class — scroll that element into view.
+  // (Far more reliable than getBounds math, which doesn't move the viewport.)
+  const el = quill.root.querySelector('.shl-cur');
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest' });
+}
+function findUpdateCount() {
+  const n = find.matches.length;
+  const has = !!$findInput.value;
+  $findCount.classList.toggle('none', has && n === 0);
+  $findCount.textContent = !has ? '' : (n ? `${find.idx + 1}/${n}` : 'No results');
+  $findPrev.disabled = n === 0;
+  $findNext.disabled = n === 0;
+}
+function findRun(keepIdx) {
+  findClearHighlights();
+  find.matches = computeMatches(buildFindText(), $findInput.value);
+  if (!find.matches.length) { find.idx = -1; findUpdateCount(); return; }
+  if (!(keepIdx && find.idx >= 0 && find.idx < find.matches.length)) {
+    const sel = quill.getSelection();
+    const from = sel ? sel.index : 0;
+    const k = find.matches.findIndex((m) => m.index >= from);
+    find.idx = k === -1 ? 0 : k;
+  }
+  findApplyHighlights();
+  findUpdateCount();
+  findScrollToCurrent();
+}
+function findGoto(step) {
+  if (!find.matches.length) return;
+  find.idx = (find.idx + step + find.matches.length) % find.matches.length;
+  findApplyHighlights();
+  findUpdateCount();
+  findScrollToCurrent();
+}
+function findOpen() {
+  if (!currentNoteId) return;
+  flushNoteSave(); // persist a clean copy before painting transient highlights
+  find.open = true;
+  $findBar.classList.remove('hidden');
+  const sel = quill.getSelection();
+  if (sel && sel.length) {
+    const t = quill.getText(sel.index, sel.length).replace(/\n/g, '');
+    if (t) $findInput.value = t;
+  }
+  $findInput.focus();
+  $findInput.select();
+  findRun(false);
+}
+function findClose() {
+  if (!find.open) return;
+  findClearHighlights();
+  const target = find.matches[find.idx];
+  find.open = false;
+  find.matches = [];
+  find.idx = -1;
+  $findBar.classList.add('hidden');
+  if (target) quill.setSelection(target.index, target.length, 'silent');
+  quill.focus();
+}
+$findInput.addEventListener('input', () => findRun(false));
+$findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); findGoto(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); findClose(); }
+});
+$findNext.addEventListener('click', () => { findGoto(1); $findInput.focus(); });
+$findPrev.addEventListener('click', () => { findGoto(-1); $findInput.focus(); });
+document.getElementById('findClose').addEventListener('click', findClose);
+
+// ---------------------------------------------------------------------------
 // Shortcuts + lifecycle
 // ---------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     addItem('note', null);
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    if (find.open) { $findInput.focus(); $findInput.select(); findRun(true); }
+    else findOpen();
   }
 });
 window.addEventListener('beforeunload', flushNoteSave);
@@ -1390,6 +1554,15 @@ async function runSelfTest() {
     quill.formatLine(0, 1, 'lineBackground', 'yellow', 'silent');
     const lineBgOk = /hlblock-yellow/.test(quill.root.innerHTML);
 
+    // find: matches map to indices, highlight paints, and it's stripped on save
+    quill.setContents([{ insert: 'alpha beta alpha\n' }], 'silent');
+    const fm = computeMatches(buildFindText(), 'alpha');
+    let findOk = fm.length === 2;
+    quill.formatText(fm[0].index, fm[0].length, 'searchHl', 'cur', 'silent');
+    findOk = findOk && /shl-cur/.test(quill.root.innerHTML);
+    findOk = findOk && !JSON.stringify(cleanContents()).includes('searchHl');
+    quill.formatText(fm[0].index, fm[0].length, 'searchHl', false, 'silent');
+
     // memory round-trip (add -> read -> delete, leaving no residue)
     let memOk = false;
     try {
@@ -1401,7 +1574,7 @@ async function runSelfTest() {
       memOk = present && !afterDel.some((x) => x.text === tag);
     } catch (e) { memOk = 'err:' + String(e); }
 
-    api.report(JSON.stringify({ ok, mdOk, htmlOk, convOk, memOk, bgOk, codeOk, lineBgOk }));
+    api.report(JSON.stringify({ ok, mdOk, htmlOk, convOk, memOk, bgOk, codeOk, lineBgOk, findOk }));
   } catch (err) {
     api.report(JSON.stringify({ ok: false, error: String(err) }));
   } finally {

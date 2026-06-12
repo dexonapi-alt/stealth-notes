@@ -540,6 +540,48 @@ body.theme-invisible .ovl-ctl { display: flex; }
 
 #editorHost { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 
+/* ---------------- In-note find bar (Ctrl+F) ---------------- */
+.find-bar {
+  position: absolute; top: 12px; right: 18px; z-index: 60;
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 6px 5px 10px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--glass-brd);
+  border-radius: 10px;
+  box-shadow: var(--shadow-pop);
+  animation: popIn .14s var(--spring);
+}
+.find-bar.hidden { display: none; }
+.find-bar .find-ico { color: var(--stone); flex: 0 0 auto; }
+#findInput {
+  width: 188px; border: none; outline: none; background: transparent;
+  font-family: inherit; font-size: 13px; color: var(--charcoal);
+  padding: 2px 2px;
+}
+#findInput::placeholder { color: var(--stone); }
+.find-count {
+  font-size: 11.5px; color: var(--stone); flex: 0 0 auto;
+  min-width: 46px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.find-count.none { color: #d4463d; }
+.find-btn {
+  flex: 0 0 auto; width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--steel);
+  border-radius: 6px; cursor: pointer;
+  transition: background .12s var(--ease), color .12s var(--ease);
+}
+.find-btn:hover { background: var(--hover-strong); color: var(--charcoal); }
+.find-btn:disabled { opacity: .35; cursor: default; }
+
+/* transient match highlights (never persisted — stripped from saved deltas) */
+.ql-editor .shl-hit { background: rgba(255, 211, 64, .5); border-radius: 2px; }
+.ql-editor .shl-cur { background: #ff9b3d; color: #1a1a1a; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
+body.theme-invisible .ql-editor .shl-hit { color: #1a1a1a; text-shadow: none; }
+body.theme-invisible .ql-editor .shl-cur { color: #1a1a1a; text-shadow: none; }
+
 /* #editor becomes the scrollable Quill container */
 #editor.ql-container {
   flex: 1; min-height: 0;
